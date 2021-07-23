@@ -88,3 +88,15 @@
 
 
 
+## 安装
+
+[https://www.cnblogs.com/fengyumeng/p/11133924.html](https://www.cnblogs.com/fengyumeng/p/11133924.html)
+
+命令
+
+```shell
+rabbitmq-server -detached // 启动
+rabbitmqctl stop // 停止
+rabbitmqctl status // 状态
+```
+
