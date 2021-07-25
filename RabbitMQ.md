@@ -128,15 +128,102 @@ public class RabbitProducer
         factory.setPort(PORT);
         factory.setUsername("xiaoshanshan");
         factory.setPassword("179980");
+        
+        // factory.setUri("amqp://userName:password@ipAddress:portNumber/virtualHost"); // 上面连接参数的设置也可以使用本语句代替
 
         Connection connection = factory.newConnection(); // 创建连接
-        Channel channel = connection.createChannel(); // 创建信道
+        Channel channel = connection.createChannel(); // 创建信道，多线程间 Channel 是不安全的
+        // 判断连接或者信道是否打开，不推荐使用 isOpen 方法，通常使用捕获 ShutdownSignalException 来判断信道是否关闭，捕获IOException或SocketException来判断连接是否关闭
+        
         channel.exchangeDeclare(EXCHANGE_NAME,"direct",true,false,null); // 创建一个 type=direct、持久化、非自动删除的交换器
-        channel.queueDeclare(QUEUE_NAME,true,false,false,null); // 创建一个持久化、非排他的、非自动删除的队列
+        /*
+DeclareOk exchangeDeclare(String exchange, String type, boolean durable, boolean autoDelete, boolean internal, Map<String, Object> arguments) throws IOException;
+		exchange:交换器的名称
+		type:交换器的类型
+		durable：是否持久化，true表示持久化，持久化可以将交换器存盘，在服务器重启时不会丢失信息
+		autoDelete：是否自动删除，自动删除的前提是至少有一个队列或者交换器与这个交换器绑定，之后所有与这个交换器绑定的队列或者交换器都与此解绑。
+		internal：是否为内置的，如果为内置的，那么客户端无法直接发送消息到这个交换器中，只能通过交换器路由到交换器这种方式
+		arguments：其他一些结构化参数
+
+void exchangeDeclareNoWait(String var1, String var2, boolean var3, boolean var4, boolean var5, Map<String, Object> var6) throws IOException;
+		此方法是上面的方法基础上增加了nowait参数，即不需要服务器返回，此时如果未创建成功，并且紧接着使用时会抛出异常，所以不推荐使用
+
+DeclareOk exchangeDeclarePassive(String var1) throws IOException;
+		检测交换器是否存在，存在则正常返回，不存在则抛出异常，同时信道会被关闭
+
+DeleteOk exchangeDelete(String exchange, boolean ifUnuserd) throws IOException;
+void exchangeDeleteNoWait(String exchange, boolean ifUnuserd) throws IOException;
+DeleteOk exchangeDelete(String exchange) throws IOException;
+		上面三个方法都用来删除交换器，exhange：交换器的名称，ifUnuserd：是否在交换器没有被使用的情况下删除
+        */
+        
+        
+        channel.queueDeclare(QUEUE_NAME,true,false,false,null); // 根据指定的名称创建一个持久化、非排他的、非自动删除的队列，连接断开时不会删除
+        /*
+        DeclareOk queueDeclare(String queue, boolean durable, boolean exclusive, boolean autoDelete, Map<String, Object> arguments) throws IOException;
+        	queue：队列名称
+        	durable：是否持久化
+        	exclusive：是否排他，如果声明为排他，那么该队列仅对首次声明它的连接可见，连接断开时自动删除，排他队列是基于连接可见的，同一个连接的不同信道是可以同时访问同一连接创建的排他队列，并且当一个连接声明了一个排他队列，那么其他连接是不允许建立同名的排他队列，即使是持久化的，一旦连接关闭或者客户端退出，该排他队列也会自动删除，适用于一个客户端同时发送或读取消息的应用场景。
+        	autoDelete：是否自动删除，前提是至少有一个消费者连接到这个队列，之后所有与这个队列连接的的消费者都断开时，才会自动删除。
+        	arguments：其他一些参数。
+        
+        如果消费者在同一个信道上想更改声明队列，那么必须先取消订阅，然后将信道置为传输模式，之后才能声明队列
+        
+        void queueDeclareNoWait(String queue, boolean durable, boolean exclusive, boolean autoDelete, Map<String, Object> arguments) throws IOException;
+        	此方法同样在声明队列时无需等待服务端返回，所以跟交换器一样也有可能发生异常情况
+        
+        DeclareOk queueDeclarePassive(String queue) throws IOException;
+        	检测队列是否存在，有则正常返回，没有则抛出异常
+        
+        DeleteOk queueDelete(String queue) throws IOException;
+    	DeleteOk queueDelete(String queue, boolean ifUnused, boolean ifEmpty) throws IOException;
+        void queueDeleteNoWait(String queue, boolean ifUnused, boolean ifEmpty) throws IOException;
+        	同样上面的三个方法用于删除队列，queue：队列名称，ifUnused：与交换器的作用相同，ifEmpty：设置为true，则表示在队列为空时删除队列
+        
+        PurgeOk queuePurge(String queue) throws IOException;
+        	清除队列的内容，不删除队列本身
+        	
+        */
+        // String QUEUE_NAME = channel.queueDeclare().getQueue(); // 创建了一个非持久化，排他的，自动删除的队列，此队列也称之为匿名队列，名称自动生成，并且该队列在连接断开时会自动删除
+        
+        /*
+        	如果声明一个已经存在的交换器或队列，只要声明参数完全匹配现存的交换器或者队列，RabbitMQ将直接成功返回，如果参数不匹配则会抛出异常
+        */
+        
         channel.queueBind(QUEUE_NAME,EXCHANGE_NAME,ROUTING_KEY); // 将交换器与队列通过路由键绑定
+        /*
+        BindOk queueBind(String queue, String exchange, String routingKey, Map<String, Object> arguments) throws IOException;
+        	queue：队列名称
+        	exchange：交换器名称
+        	routingKey：绑定队列和交换器的路由键
+        	arguments：定义绑定的其他参数
+        同样该方法也有一个不需要等待的方法
+        	
+        UnbindOk queueUnbind(String queue, String exchange, String routingKey, Map<String, Object> arguments) throws IOException;
+        	将队列与交换器解绑
+        
+        BindOk exchangeBind(String destination, String source, String routingKey, Map<String, Object> arguments) throws IOException;
+        将交换器与交换器绑定，绑定之后消息从 source 交换器转发到 destination 交换器，此时可以将 destination 交换器看作一个队列
+        	
+        
+        
+        
+        */
 
         String message = "hello world!";
         channel.basicPublish(EXCHANGE_NAME,ROUTING_KEY, MessageProperties.PERSISTENT_TEXT_PLAIN,message.getBytes()); // 发送一条持久化消息
+        /*
+        void basicPublish(String exchange, String routingKey, BasicProperties props, byte[] body) throws IOException;
+        void basicPublish(String exchange, String routingKey, boolean mandatory, BasicProperties props, byte[] body) throws IOException;
+        void basicPublish(String exchange, String routingKey, boolean mandatory, boolean immediate, BasicProperties props, byte[] body)
+            throws IOException;
+        exchange：交换器名称，指明消息需要发送到哪个交换器中，如果为空字符串，则会发送到RabbitMQ默认的交换器中
+        routingKey：路由键，交换器根据路由键将消息存储到相应的队列中
+        props：消息的基本属性集，包含14个属性成员：contentType、contentEncoding、headers、deliveryMode、priority、correlationId、replyTo、expiration、messageId、timestamp、type、userId、appId、clusterId;
+        body：消息体，真正需要发送的消息
+        
+        
+        */
 
         channel.close();
         connection.close();
@@ -175,15 +262,72 @@ public class RabbitConsumer
                 {
                     e.printStackTrace();
                 }
-                channel.basicAck(envelope.getDeliveryTag(),false);
+                channel.basicAck(envelope.getDeliveryTag(),false); // 确认消息被成功接收
+                /*
+                void basicReject(long deliveryTag, boolean requeue) throws IOException;
+                拒绝单条消息
+                	deliveryTag：可以看作消息的编号
+                	requeue：如果为true，则该消息会重新存入队列，false则会从队列中移除该消息
+                
+                void basicNack(long deliveryTag, boolean multiple, boolean requeue) throws IOException;
+                批量拒绝消息
+                	multiple：为false，则表示拒绝编号为deliveryTag这一条消息，如果为true则表示拒绝deliveryTag编号之前所有未被当前消费者确认的消息
+                
+                
+                RecoverOk basicRecover() throws IOException;
+                RecoverOk basicRecover(boolean requeue) throws IOException;
+                请求RabbitMQ重新发送还未被确认的消息
+                	requeue：为true，则未被确认的消息会重新加入到队列中，消息可能会被分配到与之前不同的消费者；如果为false，消息会被分配到与之前相同的				消费者。
+                */
             }
         };
 
         channel.basicConsume(QUEUE_NAME,consumer);
+        /*
+        String basicConsume(String queue, Consumer callback) throws IOException;
+        String basicConsume(String queue, boolean autoAck, Consumer callback) throws IOException;
+        String basicConsume(String queue, boolean autoAck, Map<String, Object> arguments, Consumer callback) throws IOException;
+        String basicConsume(String queue, boolean autoAck, String consumerTag, Consumer callback) throws IOException;
+        String basicConsume(String queue, boolean autoAck, String consumerTag, boolean noLocal, boolean exclusive, Map<String, Object> arguments, Consumer callback) throws IOException;
+        上面的方法采用推模式消费消息，此时RabbitMQ会不断的推送消息给消费者，个数受到channel.basicQos()方法设置的限制
+        	queue：队列名称
+        	autoAck：是否自动确认，建议设置为false，此时需要调用channel.basicAck方法来确认消息被成功接收，RabbitMQ在收到确认消息之后才会从内存或磁盘		中移除消息，此时队列中的消息被分为两部分，一部分为等待投递的消息，一部分为投递了还没收到确认信号的消息。如果一直没有等到确认信号，并且消费消息的消费		者已经断开连接，那么该消息会重新进入队列，等待下一个消费者。如果为true，那么推送消息后RabbitMQ将自动为该消息打上确认标记。
+        	consumerTag：消费者标签，用来区分多个消费者
+        	noLocal：设置为true则表示不能将同一个连接中生产者发送的消息发送给这个连接中的消费者
+        	exclusive：是否为排他
+        	arguments：设置消费者的其他参数
+        	callback：设置消费者的回调函数，用来处理RabbitMQ推送过来的消息。
+        	
+        采用拉模式，可以单条地获取消息
+        GetResponse basicGet(String queue, boolean autoAck) throws IOException;
+        
+        不能将basicGet放在循环体里来替代basicConsume，会严重影响RabbitMQ的性能
+        */
 
         TimeUnit.SECONDS.sleep(5);
+        
         channel.close();
         connection.close();
+        /*
+        void close() throws IOException;
+        void close(int closeCode, String closeMessage) throws IOException;
+        显示通知当前对象执行关闭操作
+        
+        */
+        
+        /*
+        
+        Connection和Channel的生命周期：
+        	Open：开启状态，标识当前对象可用
+        	Closing:正在关闭状态。当前对象被显式地通知调用关闭方法，这样就产生了一个关闭请求让其内部对象进行相应的操作，并等待这些关闭操作的完成。			    	Closed:已经关闭状态。当前对象已经接收到所有的内部对象已完成关闭动作的通知，并且其也关闭了自身。
+
+        可以在connection中注册关闭监听事件addShutdownListener(ShutdownListener listener)。当Connection和Channel转为Closed状态时会调用监听事件，		当将该事件注册到一个已经处于Closed的两个对象中，则会立刻调用
+        
+        
+        ShutdownSignalException getCloseReason()
+        获取对象关闭的原因，ShutdownSignalException对象的isHardError()方法可用来判断是Connection还是Channel的错误
+        
+        */
     }
 }
 ```
@@ -301,4 +445,6 @@ public class RabbitConsumer
 ​		无论是生产者还是消费者，都需要和`RabbitMQ Broker`建立连接，这个连接就是一条`TCP`连接。一旦TCP 连接建立起来，客户端紧接着可以创建一个`AMQP`
 
 信道，每个信道都会被指派一个唯一的`ID`。信道是建立在连接之上的虚拟连接，`RabbitMQ`处理的每条`AMOP`指令都是通过信道完成的。
+
+
 
