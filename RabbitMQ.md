@@ -448,3 +448,228 @@ public class RabbitConsumer
 
 
 
+# 进阶
+
+```java
+void basicPublish(String exchange, String routingKey, boolean mandatory, boolean immediate, BasicProperties props, byte[] body) throws IOException;
+```
+
+​		`mandatory`和`immediate`都有当消息传递过程中不可达目的地时将消息返回给生产者的功能。`RabbitMQ`提供的备份交换器可以将未能被交换器路由的消息
+
+`(`没有绑定队列或者没有匹配的绑定`)`存储起来，而不用返回给客户端。
+
+​		当`mandatory`设为`true`时，交换器无法根据自身的类型和路由键找到一个符合条件的队列，那么`RabbitMQ`会将消息返回给生产者。当`mandatory`参数设置为
+
+`false`时，出现上述情形，则消息直接被丢弃。可以通过调用`channel.addReturnListener`来添加`ReturnListener`监听器实现监听消息是否被路由到合适的队列。
+
+​		当`immediate`参数设为`true`时，如果交换器在将消息路由到队列时发现队列上并不存在任何消费者，那么这条消息将不会存入队列中。当与路由键匹配的所
+
+有队列都没有消费者时，该消息会返回至生产者。但此参数在`RabbitMQ 3.0`开始就不在被支持。即当调用`basicPublish`方法将`immediate`置为`true`时，程序会
+
+出现异常。
+
+
+
+​		使用`mandatory`参数加监听事件处理未被正确路由的消息过于繁琐，`RabbitMQ`提供了备份交换器，可以将未被路由的消息存储在其中，有需要的时候再去处
+
+理这些消息。
+
+​		备份交换器可以在声明交换器的时候添加`alternate-exchange`参数来实现，也可以通过策略实现，两者同时使用，前者会覆盖后者。消息被重新发送到备份
+
+交换器时的路由键和从生产者发出的路由键是一样的。即当消息到达备份交换器时，备份交换器拿到的路由键同样是生产者发送的路由键，然后备份交换器在根据
+
+自己的规则和这个路由键来处理消息。
+
+```java
+		Map<String,Object> arguments = new HashMap<>();
+        arguments.put("alternate-exchange","Ae");
+
+        channel.exchangeDeclare("normalExchange",BuiltinExchangeType.DIRECT,true,false,arguments);
+        channel.exchangeDeclare("Ae",BuiltinExchangeType.FANOUT,true,false,null);
+
+        channel.queueDeclare("normalQueue",true,false,false,null);
+        channel.queueBind("normalQueue","normalExchange","normalKey");
+
+        channel.queueDeclare("unroutedQueue",true,false,false,null);
+        channel.queueBind("unroutedQueue","Ae","");
+```
+
+​		1、如果设置的备份交换器不存在，客户端和`RabbitMQ`服务端都不会有异常出现，此时消息会丢失。
+
+​		2、如果备份交换器没有绑定任何队列，客户端和`RabbitMQ`服务端都不会有异常出现，此时消息会丢失。
+
+​		3、如果备份交换器没有任何匹配的队列，客户端和`RabbitMQ`服务端都不会有异常出现，此时消息会丢失。
+
+​		4、如果备份交换器和`mandatory`参数一起使用，那么`mandatory`参数无效。
+
+
+
+## 过期时间
+
+​		`RabbitMQ`可以对消息和队列设置过期时间。
+
+### 消息过期时间
+
+​		两种设置方法：两种方法同时设置，以两者之间较小的数值为准。
+
+​				1、通过队列属性设置，队列中所有消息都有相同的过期时间。在`channel.queueDeclare()`方法中加入`x-message-ttl`参数实现，单位为毫秒。如果不设
+
+​		置过期时间，则代表消息不会过期。设置为`0`，表示除非此时可以直接将消息投递给消费者，否则该消息会被立即丢弃。一旦消息过期，此时已过期的消息
+
+​		会在队列头部，马上就会从队列中抹去。
+
+​				2、对消息本身进行单独设置。通过`channel.basicPublish()`方法中加入`expiration`属性，单位为毫秒。消息过期，并不会马上从队列中抹去，每条消
+
+​		息是否过期是在即将投递到消费者之前判定的。
+
+```java
+		AMQP.BasicProperties.Builder builder = new AMQP.BasicProperties.Builder();
+        builder.deliveryMode(2); // 持久化消息
+        builder.expiration("60000"); // 设置过期时间
+        AMQP.BasicProperties properties = builder.build();
+        channel.basicPublish(EXCHANGE_NAME,ROUTING_KEY, true,properties,message.getBytes()); // 发送一条持久化消息
+```
+
+
+
+### 队列过期时间
+
+​		通过`channel. queueDeclare`方法中的`x-expires`参数可以控制队列被自动删除前处于未使用状态的时间，约束条件可以参照上面`x-message-ttl`参数，但是
+
+该参数不能设置为`0`。未使用的意思是队列上没有任何的消费者，队列也没有被重新声明，并且在过期时间段内也未调用过`basicGet`方法。
+
+​		`RabbitMQ`会确保在过期时间到达后将队列删除，但是不保障删除的动作有多及时。在`RabbitMQ`重启后，持久化的队列的过期时间会被重新计算。
+
+
+
+## 死信队列
+
+​		也可以称之为死信交换器，当一个消息在一个队列中变成死信`(`超过过期时间的消息`)`之后，它能被重新被发送到另一个交换器中，即死信交换器。绑定死
+
+信交换器的队列被称为死信队列。
+
+​		几种情况：
+
+​				1、消息被拒绝，并且设置`requeue`参数为`false`。
+
+​				2、消息过期。
+
+​				3、队列达到最大长度。
+
+​		死信交换器也是一个正常的交换器，和一般的交换器没有区别，它能在任何的队列上被指定，实际上就是设置某个队列的属性`(x-dead-letter-exchange)`。
+
+当这个队列中存在死信时，`RabbitMQ`就会自动地将这个消息重新发布到设置的死信交换器上去，进而被路由到另一个队列，即死信队列。可以监听这个队列中的
+
+消息以进行相应的处理，这个特性与将消息的过期时间设置为`0`配合使用可以弥补`immediate`参数的功能。并且可以通过`x-dead-letter-routing-key`为死信交换
+
+器指定路由键，如果没有指定则使用原队列的路由键。
+
+![](image/QQ截图20210726180822.png)
+
+
+
+
+
+## 延迟队列
+
+​		延迟队列存储的对象是对应的延迟消息，所谓延迟消息是指当消息被发送以后，并不想让消费者立刻拿到消息，而是等待特定时间后，消费者才能拿到这个消
+
+息进行消费。
+
+​		`RabbitMQ`本身并没有直接支持延迟队列的功能。但是可以通过死信队列和过期时间模拟出来，此时死信队列即被视为延迟队列。而消费者也直接订阅到死信
+
+队列上，此时原本队列上的消息会因为过期，而转入相应的死信队列，消费者再从死信队列中消费消息，从而实现延迟队列。
+
+![](image/QQ截图20210726180734.png)
+
+
+
+## 优先级队列
+
+​		具有高优先级的队列具有高的优先权，优先级高的消息具备优先被消费的特权。可以通过设置队列的`x-max-priority`参数来实现。
+
+```java
+		// 配置队列的最大优先级
+		Map<String,Object> arguments = new HashMap<>();
+        arguments.put("x-max-priority",10);
+        channel.queueDeclare("queue.priority",true,false,false,arguments);
+
+		// 设置消息的优先级
+		AMQP.BasicProperties.Builder builder = new AMQP.BasicProperties.Builder();
+        builder.priority(5);
+        AMQP.BasicProperties properties = builder.build();
+        channel.basicPublish("exchange","routingKey",properties,"message".getBytes());
+```
+
+​		如果在消费者的消费速度大于生产者的速度并且服务节点中没有消息堆积的情况下，对发送的消息设置优先级没有实际意义。
+
+
+
+## RPC实现
+
+​		`RPC`：远程过程调用，通过网络从远程计算机上请求服务。
+
+​		通过`RabbitMQ`进行`RPC`，首先客户端发送请求消息，服务端回复响应的信息，为了能够接收响应的消息，需要在请求消息中发送一个回调队列。并且为了区
+
+别当前消息对应哪一个请求，每个请求应该带有唯一的请求`ID`。之后回到队列接收到回复的消息时，可以根据这个`ID`匹配到相应的请求。如果收到一条未知`ID`
+
+的回复消息，可以简单地将其丢弃。
+
+![](image/QQ截图20210726184826.png)
+
+​		处理流程：
+
+​				1、当客户端启动时，创建一个匿名的回调队列`(`名称由`RabbitMQ`自动创建`)`。
+
+​				2、客户端为`RPC`请求设置2个属性：`replyTo`用来告知`RPC`服务端回复请求时的目的队列，即回调队列；`correlationId`用来标记一个请求。
+
+​				3、请求被发送到`rpc_queue`队列中。
+
+​				4、`RPC`服务端监听`rpc_queue`队列中的请求，当请求到来时，服务端会处理并且把带有结果的消息发送给客户端。接收的队列就是`replyTo`设定的回调
+
+​		队列。
+
+
+
+## 持久化
+
+​		持久化可以提高`RabbitMQ`的可靠性，以防在异常情况`(`重启、关闭、宕机等`)`下的数据丢失。`RabbitMQ`的持久化分为三个部分：交换器的持久化、队列的
+
+持久化和消息的持久化。
+
+​		交换器的持久化是通过在声明交换器是将`durable`参数置为`true`实现的。如果交换器不设置持久化，那么在`RabbitMQ`服务重启之后，相关的交换器元数据会
+
+丢失，不过消息不会丢失，只是不能将消息发送到这个交换器中了。
+
+​		队列的持久化是通过在声明队列时将`durable`参数置为`true`实现的。如果队列不设置持久化，那么在`RabbitMQ`服务重启之后，相关队列的元数据会丢失，此
+
+时数据也会丢失。
+
+​		队列的持久化能保证其本身的元数据不会因异常情况而丢失，但是并不能保证内部所存储的消息不会丢失。要确保消息不会丢失，需要将其设置为持久化。通
+
+过将消息的投递模式`(BasicProperties中的deliveryMode`属性`)`设置为`2`即可实现消息的持久化。
+
+​		设置了队列和消息的持久化，当`RabbitMQ`服务重启之后，消息依旧存在。单单只设置队列持久化，重启之后消息会丢失;单单只设置消息的持久化，重启之后
+
+队列消失，继而消息也丢失。如果将所有的消息都设置为持久化，将会严重影响`RabbitMQ`的性能。
+
+​		即使将交换器、队列、消息都设置为持久化也不能保证消息不丢失：如果消费者将`autoAck`参数置为`true`，在收到消息后还没处理就宕机了，此时数据也丢
+
+失了。其次，在持久化的消息存入`RabbitMQ`后，还需要一段很短的时间才能存入磁盘，`RabbitMQ`并不会为每条消息进行同步存盘，如果这段时间服务节点发生宕
+
+机，重启等情况，消息没来得及存盘，那么数据同样会丢失。
+
+​		要解决上述问题，可以通过镜像队列机制和发送端引入事务机制或发送方确认机制。
+
+
+
+
+
+
+
+
+
+
+
+
+
