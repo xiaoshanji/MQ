@@ -663,11 +663,316 @@ void basicPublish(String exchange, String routingKey, boolean mandatory, boolean
 
 
 
+## 生产者确认
+
+​		默认情况下发送消息的操作是不会返回任何信息给生产者的，即生产者是不知道消息有没有正确地到达服务器。如果在消息到达服务器之前已经丢失，持久化
+
+操作也解决不了这个问题，`RabbitMQ`针对这个问题，提供了两种解决方式：
+
+​				1、通过事务机制实现。
+
+​				2、通过发送方确认机制实现。
+
+### 事务机制
+
+​		`RabbitMQ`客户端中与事务机制相关的方法有三个：
+
+​				`channel.txSelect`：将信道设置为事务模式。
+
+​				`channel.txCommit`：提交事务。
+
+​				`channel.txRollback`：事务回滚。
+
+```java
+		try
+        {
+            channel.txSelect();
+            channel.basicPublish(EXCHANGE_NAME,ROUTING_KEY, MessageProperties.PERSISTENT_TEXT_PLAIN,message.getBytes()); // 发送一条持久化消息
+            channel.txCommit();
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+            channel.txRollback();
+        }
+```
+
+![](image/QQ截图20210727083336.png)
 
 
 
+​		发送多条消息：
+
+```java
+		channel.txSelect();
+        for(int i = 0 ; i < length ; i++)
+        {
+            try
+            {
+
+                channel.basicPublish(EXCHANGE_NAME,ROUTING_KEY, MessageProperties.PERSISTENT_TEXT_PLAIN,message.getBytes()); // 发送一条持久化消息
+                channel.txCommit();
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+                channel.txRollback();
+            }
+        }
+```
+
+​		事务机制在一条消息发送之后会使发送端阻塞，以等待`RabbitMQ`的回应，之后才能继续发送下一条消息。
+
+​		事务确实能够解决消息发送方和`RabbitMQ`之间消息确认的问题，只有消息成功被`RabbitMQ`接收，事务才能提交成功，否则便可在捕获异常之后进行事务回
+
+滚，与此同时可以进行消息重发。但是使用事务机制会吸干`RabbitMQ`的性能。
 
 
+
+### 发送方确认
+
+​		生产者将信道设置成确认模式，所有在该信道上面发布的消息都会被指派一个唯一的`ID(`从`1`开始`)`，一旦消息被投递到所有匹配的队列之后，`RabbitMQ`就
+
+会发送一个确认给生产者`(`包含消息的唯一`ID)`，这就使得生产者知晓消息已经正确到达了目的地了。如果消息和队列是可持久化的，那么确认消息会在消息写入
+
+磁盘之后发出。`RabbitMQ`回传给生产者的确认消息中的`deliveryTag`包含了确认消息的序号，此外`RabbitMQ`也可以设置`channel.basicAck`方法中的`multiple`参
+
+数，表示到这个序号之前的所有消息都已经得到了处理。
+
+![](image/QQ截图20210727084816.png)
+
+​		发送方确认机制最大的好处在于它是异步的，一旦发布一条消息，生产者应用程序就可以在等信道返回确认的同时继续发送下一条消息，当消息最终得到确认
+
+之后，生产者应用程序便可以通过回调方法来处理该确认消息，如果`RabbitMQ`因为自身内部错误导致消息丢失，就会发送一条`nack`命令，生产者应用程序同样可
+
+以在回调方法中处理该`nack`命令。
+
+​		生产者通过调用`channel.confirmSelect`方法将信道设置为`confirm`模式，之后`RabbitMQ`会返回命令表示同意生产者将当前信道设置为`confirm`模式。所有
+
+被发送的后续消息都被`ack`或者`nack`一次，不会出现一条消息既被`ack`又被`nack`的情况，并且`RabbitMQ`也并没有对消息被`confirm`的快慢做任何保证。
+
+```java
+		try
+        {
+            channel.confirmSelect();
+            channel.basicPublish(EXCHANGE_NAME,ROUTING_KEY, MessageProperties.PERSISTENT_TEXT_PLAIN,message.getBytes()); // 发送一条持久化消息
+            if(!channel.waitForConfirms())
+            {
+                System.out.println("send message failed");
+            }
+
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+```
+
+​		发送多条消息：
+
+```java
+		for(int i = 0 ; i < length ; i++)
+        {
+            try
+            {
+                channel.confirmSelect(); // 这里与事务机制不同
+                channel.basicPublish(EXCHANGE_NAME,ROUTING_KEY, MessageProperties.PERSISTENT_TEXT_PLAIN,message.getBytes()); // 发送一条持久化消息
+                if(!channel.waitForConfirms()) // 此种方式与事务机制相同
+                {
+                    System.out.println("send message failed");
+                }
+
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+            }
+        }
+```
+
+![](image/QQ截图20210727091537.png)
+
+```java
+boolean waitForConfirms() throws InterruptedException;
+boolean waitForConfirms(long timeout) throws InterruptedException, TimeoutException;
+void waitForConfirmsOrDie() throws IOException, InterruptedException;
+void waitForConfirmsOrDie(long timeout) throws IOException, InterruptedException, TimeoutException;
+```
+
+​		如果信道没有开启`confirm`模式，则调用任何`waitForConfirms`方法都会报出`java.lang.IllegalStateException`。对于没有参数的`waitForConfirms`方法来
+
+说，其返回的条件是客户端收到了相应的确认或拒绝命令或者被中断。参数`timeout`表示超时时间，一旦等待`RabbitMQ`回应超时就会抛出
+
+`java.util.concurrent.TimeoutException`的异常。两个`waitForConfirmsorDie`方法在接收到`RabbitMQ`返回的拒绝命令之后会抛出`java.io.IOException`。
+
+​		
+
+​		确认模式的优势在于并不一定需要同步确认：
+
+​				1、批量确认：每发送一批消息后，调用`channel.waitForConfirms`方法，等待服务器的返回确认。
+
+```java
+		try
+        {
+            channel.confirmSelect();
+            int count = 0;
+            while (true)
+            {
+                channel.basicPublish(EXCHANGE_NAME,ROUTING_KEY, MessageProperties.PERSISTENT_TEXT_PLAIN,message.getBytes()); // 发送一条持久化消息
+                // 将发送出去的消息存入缓存
+                if(++count >= BATCH_COUNT)
+                {
+                    count = 0;
+                    try
+                    {
+                        if(channel.waitForConfirms())
+                        {
+                            // 将缓存中的消息清空
+                        }
+                        // 将缓存中的消息重新发送
+                    }
+                    catch (Exception e)
+                    {
+                        e.printStackTrace();
+                        // 将缓存中的消息重新发送
+                    }
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            e.printStackTrace();
+        }
+```
+
+
+
+​				2、异步确认方法：提供一个回调方法，服务器确认了一条或者多条消息后服务器会回调这个方法进行处理。在客户端`Channel`接口中提供的
+
+`addConfirmListener`方法可以添加`ConfirmListener`这个回调接口，这个`ConfirmListener`接口包含两个方法：`handleAck`和`handleNack`，分别用来处理
+
+`RabbitMQ`回传的`Basic.Ack`和`Basic.Nack`。在这两个方法中都包含有一个参数`deliveryTag(`在`confirm`模式下用来标记消息的唯一有序序号)。需要为每一个信
+
+道维护一个`"unconfirm"(`采用有序集合`SortedSet)`的消息序号集合，每发送一条消息，集合中的元素加`1`。每当调用`ConfirmListener`中的`handleAck`方法
+
+时，`unconfirm`集合中删掉相应的一条`(multiple`设置为`false)`或者多条`(multiple`设置为`true)`记录。
+
+```java
+		SortedSet<Long> confirmSet = new TreeSet(); // 消息序号集合
+        channel.confirmSelect();
+        channel.addConfirmListener(new ConfirmListener() {
+            @Override
+            public void handleAck(long deliveryTag, boolean multiple) throws IOException {
+                System.out.println("ack,seqNo:" + deliveryTag + ", multiple：" + multiple);
+                if(multiple)
+                {
+                    confirmSet.headSet(deliveryTag - 1).clear();
+                }
+                else
+                {
+                    confirmSet.remove(deliveryTag);
+                }
+            }
+
+            @Override
+            public void handleNack(long deliveryTag, boolean multiple) throws IOException {
+                if(multiple)
+                {
+                    confirmSet.headSet(deliveryTag - 1).clear();
+                }
+                else
+                {
+                    confirmSet.remove(deliveryTag)
+                }
+                // 这里需要添加处理消息重发的场景
+            }
+        });
+		
+		// 模拟一致发送消息
+        while (true)
+        {
+            long no = channel.getNextPublishSeqNo();
+            channel.basicPublish(EXCHANGE_NAME,ROUTING_KEY, MessageProperties.PERSISTENT_TEXT_PLAIN,message.getBytes()); // 发送一条持久化消息
+            confirmSet.add(no);
+        }
+```
+
+​		事务机制和`confirm`机制确保的是消息能够正确地发送至`RabbitMQ`，指消息被正确地发往至`RabbitMQ`的交换器，如果此交换器没有匹配的队列，那么消息也
+
+会丢失。所以在使用这两种机制的时候要确保所涉及的交换器能够有匹配的队列。更进一步地讲，发送方要配合`mandatory`参数或者备份交换器一起使用来提高消
+
+息传输的可靠性。
+
+
+
+## 消费端
+
+### 消息分发
+
+​		当`RabbitMQ`队列拥有多个消费者时，队列收到的消息将以轮询的分发方式发送给消费者。每条消息只会发送给订阅列表里的一个消费者。而且它是专门为并
+
+发程序设计的。如果现在负载加重，那么只需要创建更多的消费者来消费处理消息即可。
+
+​		但此种方式有时并不是很优雅，比如当某些消费者任务繁重，来不及消费消息，则会造成性能的下降。`channel.basicQos`方法允许限制信道上的消费者所能
+
+保持的最大未确认消息的数量。`RabbitMQ`会保存一个消费者的列表，每发送一条消息都会为对应的消费者计数，如果达到了所设定的上限，那么`RabbitMQ`就不会
+
+向这个消费者再发送任何消息。直到消费者确认了某条消息之后，`RabbitMQ`将相应的计数减1，之后消费者可以继续接收消息，直到再次到达计数上限。这种机制
+
+可以类比于`TCP/IP`中的滑动窗口。但此种方式只对于推模式有效，对于拉模式是无效的。
+
+```java
+void basicQos(int prefetchCount) throws IOException;
+void basicQos(int prefetchCount, boolean global) throws IOException;
+void basicQos(int prefetchSize, int prefetchCount, boolean global) throws IOException;
+
+/*
+prefetchCount：最大未确认消息的数量，0表示没有上限
+prefetchSize：总体大小的上限，0表示没有上限
+global：默认为false
+*/
+
+```
+
+![](image/QQ截图20210727104226.png)
+
+
+
+### 消息顺序性
+
+​		消息的顺序性是指消费者消费到的消息和发送者发布的消息的顺序是一致的。可以通过在消息体内添加全局有序标识来实现。
+
+
+
+### 消息传输保障
+
+​		消息中间件的消息传输保障分为三个层级：`RabbitMQ`支持最多一次和最少一次
+
+​				1、最多一次：消息可能会丢失，但绝不会重复传输。
+
+​				2、最少一次：消息绝不会丢失，但可能会重复传输。
+
+​				3、恰好一次：每条消息肯定会被传输一次且仅传输一次。
+
+​		最少一次需要考虑的内容：
+
+​				1、消息生产者需要开启事务机制或者`confirm`机制，以确保消息可以可靠地传输到`RabbitMQ`中。
+
+​				2、消息生产者需要配合使用`mandatory`参数或者备份交换器来确保消息能够从交换器路由到队列中，进而能够保存下来而不会被丢弃。
+
+​				3、消息和队列都需要进行持久化处理，以确保`RabbitMQ`服务器在遇到异常情况时不会造成消息丢失。
+
+​				4、消费者在消费消息的同时需要将`autoAck`设置为`false`，然后通过手动确认的方式去确认已经正确消费的消息，以避免在消费端引起不必要的消息丢
+
+​		失。
+
+​		最多一次的方式就无须考虑以上那些方面，生产者随意发送，消费者随意消费，不过这样很难确保消息不会丢失。
+
+​		目前大多数主流的消息中间件都没有消息去重机制，都不保障恰好一次。去重处理一般是在业务客户端实现，比如引入`GUID(Globally Unique Identifier)`的
+
+概念。针对`GUID`，如果从客户端的角度去重，那么需要引入集中式缓存，必然会增加依赖复杂度，另外缓存的大小也难以界定。建议在实际生产环境中，业务方
+
+根据自身的业务特性进行去重，比如业务消息本身具备幂等性，或者借助Redis等其他产品进行去重处理。
 
 
 
