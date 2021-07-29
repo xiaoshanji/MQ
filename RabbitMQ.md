@@ -976,5 +976,166 @@ global：默认为false
 
 
 
+# 管理
 
+## 虚拟主机
+
+​		每一个`RabbitMQ`服务器都能创建虚拟的消息服务器，我们称之为虚拟主机，简称为`vhost`。每一个`vhost`本质上是一个独立的小型`RabbitMQ`服务器，拥有自
+
+己独立的队列交换器及绑定关系等，并且它拥有自己独立的权限。`vhost`就像是虚拟机与物理服务器一样，它们在各个实例间提供逻辑上的分离，为不同程序安全
+
+保密地运行数据，它既能将同一个`RabbitMQ`中的众多客户区分开，又可以避免队列和交换器等命名冲突。`vhost`之间是绝对隔离的，无法将不用`vhost`之间的交
+
+换器与队列进行绑定，这样既保证了安全性，又可以确保可移植性。默认的`vhost`为`/`。
+
+​		创建`vhost`：
+
+```shell
+rabbitmqctl add_vhost host_name
+```
+
+​		查看：
+
+```shell
+rabbitmqctl list_vhost [vhostinfoitem]
+
+vhostinfoitem有两个取值：
+	name:表示vhost的名称
+	tracing：是否使用了RabbitMQ的trace功能
+```
+
+​		删除：删除一个`vhost`同时也会删除其下所有的队列、交换器、绑定关系、用户权限、参数和策略等信息
+
+```shell
+rabbitmqctl delete_vhost host_name
+```
+
+
+
+​		在`RabbitMQ`中，权限控制是以`vhost`为单位的，当创建一个用户时，用户通常会被指派给至少一个`vhost`，并且只能访问被指派的`vhost`内的队列、交换器
+
+和绑定关系等。所以`RabbitMQ`中的赋予权限是指在`vhost`级别对用户而言的权限授予。
+
+```shell
+// 配置权限
+rabbitmqctl set_permissions [-p vhost] {user} {conf} {write} {read}
+	vhost:授予用户访问权限的vhost名称，默认值为"/"
+	user:可以访问指定vhost的用户名
+	conf:一个用于匹配用户在哪些资源上拥有可配置(队列和交换器的创建和删除之类的操作)权限的正则表达式
+	write:一个用于匹配用户在哪些资源上拥有可写(发布消息)权限的正则表达式
+	read:一个用于匹配用户在哪些资源上拥有可读(与消息有关的操作，包括读取消息及清空整个队列等)权限的正则表达式
+	
+// 清除权限
+rabbitmqctl clear_permissions [-p vhost] {username}
+```
+
+​		
+
+​		两个命令查看权限权限信息：
+
+```shell
+rabbitmqctl list_permissions [-p vhost]：显示虚拟主机的权限
+rabbitmqctl list_user_permissions {username}：显示用户的权限
+```
+
+
+
+## 用户
+
+​		在`RabbitMQ`中，用户是访问控制的基本单元，且单个用户可以跨越多个`vhost`进行授权。针对一至多个`vhost`，用户可以被赋予不同级别的访问权限，并使
+
+用标准的用户名和密码来认证用户。
+
+​		创建：
+
+```shell
+rabbitmqctl add_user {username} {password}
+```
+
+​		修改密码：
+
+```shell
+rabbitmqctl change_password {username} {newpassword}
+```
+
+​		清除密码：
+
+```shell
+rabbitmqctl clear_password {username}
+```
+
+​		验证用户：
+
+```shell
+rabbitmqctl authenticate_user {username} {password}
+```
+
+​		删除用户：
+
+```shell
+rabbitmqctl delete_user {username}
+```
+
+​		查看用户：
+
+```shell
+rabbitmqctl list_users
+```
+
+
+
+​		`5`中角色：
+
+​				`none`：无任何角色。新创建的用户的角色默认为`none`。
+
+​				`management`：可以访问`Web`管理页面。
+
+​				`policymaker`：包含`management`的所有权限，并且可以管理策略和参数。
+
+​				`monitoring`：包含`management`的所有权限，并且可以看到所有连接、信道及节点相关的信息。
+
+​				`administartor`：包含`monitoring`的所有权限，并且可以管理用户、虚拟主机、权限、策略、参数等。`administator`代表了最高的权限。
+
+​		设置角色：
+
+```shell
+rabbitmqctl set_user_tags {username} {tag ...}
+	tag：用于设置0或多个角色，设置之后任何之前现有的身份都会被删除
+```
+
+
+
+## Web端管理
+
+​		`RabbitMQ management`插件可以提供`Web`管理界面用来管理如前面所述的虚拟主机、用户等，也可以用来管理队列、交换器、绑定关系、策略、参数等，还可
+
+以用来监控`RabbitMQ`服务的状态及一些数据统计类信息，可谓是功能强大，基本上能够涵盖所有`RabbitMQ`管理的功能。
+
+​		插件存放在`$RABBITMQ_HOME/plugins`目录下。
+
+​		启动插件：
+
+```shell
+rabbitmq-plugins enable [plugin-name]
+```
+
+​		关闭插件：
+
+```shell
+rabbitmq-plugins disable [plugin-name]
+```
+
+​		查看插件使用情况：
+
+```shell
+rabbitmq-plugins list
+	[E*]：显式启动
+	[e*]：隐式启动
+```
+
+
+
+​		`HTTP API`：不仅可以使用`Web`界面来管理`RabbitMQ`，也可以使用其提供的`API`来实现，完全基于`RESTful`风格。可以通过`Web`页面上的`HTTP API`链接来查
+
+看所有的`API`。
 
