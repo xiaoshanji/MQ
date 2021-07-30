@@ -1139,3 +1139,35 @@ rabbitmq-plugins list
 
 看所有的`API`。
 
+
+
+# 配置
+
+## 环境变量
+
+​		`RabbitMQ`的环境变量都是以`RABBITMQ_`开头的，可以在`Shell`环境中设置，也可以在`rabbitmq-env.conf(`默认在`$RABBITMQ/etc/rabbitmq/`目录下，可以在
+
+启动时指定`RABBITMQ_CONF_ENV_FILE`变量来设置此文件的路径`)`这个`RabbitMQ`环境变量的定义文件中设置。如果是在非`Shell`环境中配置，则需要将`RABBITMQ_`
+
+这个前缀去除。优先级顺序按照`Shell`环境最优先，其次`rabbitmg-env.conf`配置文件，最后是默认的配置。
+
+​		如果需要制定节点的名称，而不是采用默认的方式，可以在`rabbitmq-server`命令前添加`RABBITMO NODENAME`变量来设定指定的名称。
+
+
+
+## 参数和策略
+
+​		`Parameter`可以通过`rabbitmqctl`工具或者`RabbitMQ Management`插件提供的`HTTP API`接口来设置。`RabbitMQ`中一共有两种类型的`Parameter`：`vhost`级别
+
+的`Parameter`和`global`级别的`Parameter`。`vhost`级别的`Parameter`由一个组件名称、名称和值组成，而`global`级别的参数由一个名称和值组成，不管是
+
+`vhost`级别还是`global`级别的参数，其所对应的值都是`JSON`类型的。
+
+​		策略`(Policy)`是一种特殊的参数，其是`vhost`级别的。一个`Policy`可以匹配一个或者多个队列`(`或者交换器，或者两者兼有`)`，这样便于批量管理。与此
+
+同时，`Policy`也可以支持动态地修改一些属性参数，大大地提高了应用的灵活度。一般来说，`Policy`用来配置`Federation`、镜像、备份交换器、死信等功能。
+
+​		如果有多个`Policy`作用于同一个交换器或者队列，那么`Priority`最大的那个`Policy`才会有用。如果两个或多个`Policy`都作用到同一个交换器或者队列上，
+
+且这些`Policy`的优先级都是一样的，则参数项最多的`Policy`具有决定权。如果参数一样多，则最后添加的`Policy`具有决定权。
+
